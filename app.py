@@ -59,14 +59,12 @@ class ReviewerRecommendationSystem:
         
     def load_dataset(self):
         if not os.path.exists(self.dataset_path):
-            st.error(f"Dataset path not found: {self.dataset_path}")
             return False
         try:
             author_dirs = [d for d in os.listdir(self.dataset_path) if os.path.isdir(os.path.join(self.dataset_path, d))]
             self.authors = author_dirs
             return True
-        except Exception as e:
-            st.error(f"Error loading dataset: {str(e)}")
+        except Exception:
             return False
     
     def extract_text_from_pdf(self, pdf_path: str) -> str:
@@ -80,8 +78,7 @@ class ReviewerRecommendationSystem:
                     if page_text:
                         text += page_text + " "
             return text
-        except Exception as e:
-            st.warning(f"Error extracting text from {pdf_path}: {str(e)}")
+        except Exception:
             return ""
     
     def preprocess_text(self, text: str) -> str:
@@ -213,11 +210,10 @@ class ReviewerRecommendationSystem:
         return results
     
     def compute_bert_similarity(self, query_text: str, k: int = 5) -> List[Dict]:
-        # This will try to use sentence-transformers if available. Import inside function to avoid heavy import at startup.
         try:
             from sentence_transformers import SentenceTransformer
             from sklearn.metrics.pairwise import cosine_similarity
-        except Exception as e:
+        except Exception:
             st.warning("sentence-transformers not available. BERT similarity disabled. Consider precomputing embeddings locally.")
             return []
 
@@ -294,7 +290,7 @@ if 'results' not in st.session_state:
     st.session_state.results = None
 
 st.markdown('<p class="main-header">📚 Reviewer Recommendation System</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">AI-powered system to match research papers with the best potential reviewers</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">AI-powered system to match research papers with the best potential reviewers</p>')
 
 # Preferred dataset locations inside repo (adjust if needed)
 PREFERRED_PATHS = [
@@ -303,21 +299,28 @@ PREFERRED_PATHS = [
     "dataset"
 ]
 
-# Sidebar configuration (dataset path input + load button)
+# ---------------- Sidebar: show chosen dataset path & load status (read-only) ----------------
 with st.sidebar:
     st.header("⚙️ Configuration")
     # auto-detect default path
-    default_path = next((p for p in PREFERRED_PATHS if os.path.exists(p) and os.listdir(p)), PREFERRED_PATHS[0])
-    dataset_path = st.text_input("Dataset Path", default_path)
-
-    if st.button("Load Dataset"):
-        with st.spinner("Loading dataset..."):
-            system = ReviewerRecommendationSystem(dataset_path)
-            if system.load_dataset():
-                st.session_state.system = system
-                st.success(f"✅ Loaded {len(system.authors)} authors")
-            else:
-                st.error("Failed to load dataset")
+    detected_path = next((p for p in PREFERRED_PATHS if os.path.exists(p) and os.listdir(p)), None)
+    if detected_path:
+        st.success("Dataset detected")
+        st.write("**Dataset path:**")
+        st.code(detected_path)
+        # Auto-start loading if not in session_state
+        if st.session_state.system is None:
+            with st.spinner("Loading dataset..."):
+                system = ReviewerRecommendationSystem(detected_path)
+                if system.load_dataset():
+                    st.session_state.system = system
+                    st.success(f"✅ Loaded {len(system.authors)} authors")
+                else:
+                    st.error("Failed to load dataset. Check folder structure.")
+    else:
+        st.warning("No dataset found in repo. Expected paths:")
+        for p in PREFERRED_PATHS:
+            st.write(f"- {p}")
     st.divider()
     method = st.selectbox(
         "Matching Method",
@@ -328,15 +331,13 @@ with st.sidebar:
     st.divider()
     st.info("💡 *Tip:* Upload a PDF paper to get personalized reviewer recommendations")
 
-# Auto-load if not loaded and dataset exists
-if st.session_state.system is None and os.path.exists(dataset_path) and os.listdir(dataset_path):
+# ---------------------- Auto-load fallback if sidebar didn't run (defensive) ----------------
+if st.session_state.system is None and detected_path:
     try:
-        system = ReviewerRecommendationSystem(dataset_path)
+        system = ReviewerRecommendationSystem(detected_path)
         if system.load_dataset():
             st.session_state.system = system
-            st.success(f"✅ Auto-loaded {len(system.authors)} authors from {dataset_path}")
     except Exception:
-        # ignore auto-load failures
         pass
 
 # ---------------------- Main app tabs ----------------------
@@ -351,7 +352,7 @@ with tabs[0]:
         with col2:
             if st.button("🔍 Find Reviewers", type="primary", use_container_width=True):
                 if st.session_state.system is None:
-                    st.error("Please load the dataset first!")
+                    st.error("Dataset not loaded. App couldn't find dataset in repo.")
                 else:
                     with open("temp_paper.pdf", "wb") as f:
                         f.write(uploaded_file.getvalue())

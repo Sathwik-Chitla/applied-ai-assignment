@@ -8,22 +8,17 @@ scipy==1.11.4
 pandas==2.2.2
 
 # PDF extraction
-PyPDF2==3.1.0
+PyPDF2==3.0.1
 pdfplumber==0.9.0
-# tika omitted (requires Java); add only if you control the runtime
 
 # NLP / embeddings
-sentence-transformers==2.2.2
 gensim==4.4.0
 nltk==3.8.1
 
 # Utilities
 joblib==1.3.2
 requests==2.32.2
-
-# Optional for cloud storage (if you host dataset externally)
-boto3==1.30.46
-
 gdown==4.7.0
 
-
+# Optional for cloud storage
+boto3==1.28.57

@@ -13,7 +13,7 @@ PyPDF2==3.0.1
 pdfplumber==0.9.0
 pdfminer.six==20221105
 
-# NLP / embeddings (precompute sentence-transformers locally; gensim for Doc2Vec)
+# NLP / embeddings (precompute locally; gensim for Doc2Vec)
 gensim==4.4.0
 nltk==3.8.1
 

@@ -1,22 +1,19 @@
 import streamlit as st
 import os
 import pickle
+import zipfile
 from pathlib import Path
 import numpy as np
 from typing import List, Dict, Tuple
 import time
-import zipfile
-zip_path = "dataset.zip"
-extract_path = "dataset"
 
-if not os.path.exists(extract_path):
-    st.info("Extracting dataset... please wait ⏳")
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall(extract_path)
-    st.success("✅ Dataset extracted successfully!")
-else:
-    st.write("📁 Dataset already available.")
-
+# --- Dataset download deps (gdown) will be used if available ---
+# Make sure to add gdown to requirements.txt: gdown==4.7.0
+try:
+    import gdown
+    _GDOWN_AVAILABLE = True
+except Exception:
+    _GDOWN_AVAILABLE = False
 
 st.set_page_config(
     page_title="Reviewer Recommendation System",
@@ -61,6 +58,100 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ---------------- Dataset download & extraction helpers ----------------
+def unzip_file(zip_path: str, extract_to: str) -> bool:
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_to)
+        return True
+    except Exception as e:
+        st.warning(f"Failed to extract {zip_path}: {e}")
+        return False
+
+def download_dataset_from_gdrive(gdrive_file_id: str, output_zip: str = "dataset.zip") -> bool:
+    if not _GDOWN_AVAILABLE:
+        st.error("gdown not installed. Add `gdown==4.7.0` to requirements.txt and redeploy.")
+        return False
+    try:
+        # gdown supports both file id and full url
+        url = f"https://drive.google.com/file/d/1HVI2GcKWZHd4h2Yh49WIR5j9iSY-6b--/view?usp=sharing"
+        # Use quiet=False so we get progress during first-run logs (Streamlit will capture it)
+        gdown.download(url, output_zip, quiet=False, fuzzy=True)
+        return True
+    except Exception as e:
+        st.warning(f"gdown download failed: {e}")
+        return False
+
+def download_dataset_from_url(url: str, output_zip: str = "dataset.zip") -> bool:
+    if not _GDOWN_AVAILABLE:
+        st.error("gdown not installed. Add `gdown==4.7.0` to requirements.txt and redeploy.")
+        return False
+    try:
+        gdown.download(url, output_zip, quiet=False, fuzzy=True)
+        return True
+    except Exception as e:
+        st.warning(f"Download from URL failed: {e}")
+        return False
+
+def ensure_dataset_available(extract_to: str = "dataset") -> bool:
+    """
+    Ensure that the dataset folder exists (and is non-empty).
+    If not present, attempt to download from GDrive using secrets or env vars and unzip it.
+    Secrets (preferred):
+      st.secrets["GDRIVE_FILE_ID"]  -> Google Drive file id
+      or st.secrets["DATASET_URL"] -> direct url
+    Environment variables fallback:
+      GDRIVE_FILE_ID or DATASET_URL
+    """
+    dest = Path(extract_to)
+    if dest.exists() and any(dest.iterdir()):
+        return True
+
+    # Check secrets first
+    gdrive_id = st.secrets.get("GDRIVE_FILE_ID") if isinstance(st.secrets, dict) else st.secrets.get("GDRIVE_FILE_ID")
+    data_url = st.secrets.get("DATASET_URL") if isinstance(st.secrets, dict) else st.secrets.get("DATASET_URL")
+
+    # Fallback to environment variables
+    if not gdrive_id:
+        gdrive_id = os.environ.get("GDRIVE_FILE_ID")
+    if not data_url:
+        data_url = os.environ.get("DATASET_URL")
+
+    if not gdrive_id and not data_url:
+        st.info("Dataset not found locally. To auto-download, set `GDRIVE_FILE_ID` (preferred) or `DATASET_URL` in Streamlit Secrets or env vars.")
+        return False
+
+    # Download to dataset.zip
+    zip_path = "dataset.zip"
+    success = False
+    with st.spinner("Downloading dataset — this may take a while on first run..."):
+        if gdrive_id:
+            success = download_dataset_from_gdrive(gdrive_id, zip_path)
+        elif data_url:
+            success = download_dataset_from_url(data_url, zip_path)
+
+    if not success:
+        return False
+
+    with st.spinner("Extracting dataset..."):
+        ok = unzip_file(zip_path, extract_to)
+        try:
+            os.remove(zip_path)
+        except Exception:
+            pass
+        if not ok:
+            st.warning("Extraction failed — please check the zip structure and try again.")
+            return False
+
+    st.success("Dataset is ready.")
+    return True
+
+# Try to ensure dataset before main UI runs
+# This will not block the UI strongly but will show messages.
+_ = ensure_dataset_available("dataset")
+
+# ----------------------------------------------------------------------
+
 class ReviewerRecommendationSystem:
     def __init__(self, dataset_path: str):
         self.dataset_path = dataset_path
@@ -93,7 +184,7 @@ class ReviewerRecommendationSystem:
                         text += page_text + " "
             return text
         except Exception as e:
-            st.warning(f"Error extracting text from {pdf_path}: {str(e)}")
+            st.warning(f"Error extracting text from {pdf_path}: {e}")
             return ""
 
     def preprocess_text(self, text: str) -> str:
@@ -431,6 +522,7 @@ class ReviewerRecommendationSystem:
         except:
             return ['Machine Learning', 'NLP', 'AI']
 
+# ---------------- Streamlit session state ----------------
 if 'system' not in st.session_state:
     st.session_state.system = None
 if 'results' not in st.session_state:
@@ -441,6 +533,7 @@ st.markdown('<p class="sub-header">AI-powered system to match research papers wi
 
 with st.sidebar:
     st.header("⚙️ Configuration")
+    # Default dataset_path - adjust if your zip extracts to a different structure.
     dataset_path = st.text_input("Dataset Path", "dataset/dataset/authors")
     if st.button("Load Dataset"):
         with st.spinner("Loading dataset..."):
@@ -575,4 +668,3 @@ with tabs[2]:
     - Consider your use case when selecting a method
     """)
 st.divider()
-

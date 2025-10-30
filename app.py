@@ -5,6 +5,18 @@ from pathlib import Path
 import numpy as np
 from typing import List, Dict, Tuple
 import time
+import zipfile
+zip_path = "dataset.zip"
+extract_path = "dataset"
+
+if not os.path.exists(extract_path):
+    st.info("Extracting dataset... please wait ⏳")
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(extract_path)
+    st.success("✅ Dataset extracted successfully!")
+else:
+    st.write("📁 Dataset already available.")
+
 
 st.set_page_config(
     page_title="Reviewer Recommendation System",
@@ -563,3 +575,4 @@ with tabs[2]:
     - Consider your use case when selecting a method
     """)
 st.divider()
+

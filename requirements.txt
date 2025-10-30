@@ -1,28 +1,24 @@
 # Streamlit + UI
 streamlit==1.26.0
 
-# Numerical & ML
+# Core ML
 numpy==1.26.4
 scikit-learn==1.3.2
 scipy==1.11.4
 pandas==2.2.2
 joblib==1.3.2
 
-# PDF extraction
+# PDF
 PyPDF2==3.0.1
 pdfplumber==0.9.0
 pdfminer.six==20221105
 
-# NLP / embeddings (precompute locally; gensim for Doc2Vec)
+# NLP / Embeddings
 gensim==4.4.0
 nltk==3.8.1
 
-# Utilities & download
+# Utilities
 requests==2.32.5
 gdown==4.7.0
-
-# Images / file handling (must be <10 for Streamlit 1.26)
 pillow==9.5.0
-
-# Cloud storage (optional)
 boto3==1.28.57

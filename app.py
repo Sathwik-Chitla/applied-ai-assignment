@@ -54,6 +54,7 @@ class ReviewerRecommendationSystem:
         self.dataset_path = dataset_path
         self.authors = []
         self.author_embeddings = {}
+        self.author_corpora = {}
         self.models_loaded = False
         
     def load_dataset(self):
@@ -62,12 +63,12 @@ class ReviewerRecommendationSystem:
             return False
         try:
             author_dirs = [d for d in os.listdir(self.dataset_path) if os.path.isdir(os.path.join(self.dataset_path, d))]
-            self.authors = author_dirs
+            self.authors = sorted(author_dirs)
             return True
         except Exception as e:
             st.error(f"Error loading dataset: {str(e)}")
             return False
-    
+
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         try:
             import PyPDF2
@@ -75,33 +76,119 @@ class ReviewerRecommendationSystem:
             with open(pdf_path, 'rb') as file:
                 reader = PyPDF2.PdfReader(file)
                 for page in reader.pages:
-                    text += page.extract_text()
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + " "
             return text
         except Exception as e:
             st.warning(f"Error extracting text from {pdf_path}: {str(e)}")
             return ""
-    
+
     def preprocess_text(self, text: str) -> str:
         import re
+        if not text:
+            return ""
         text = text.lower()
         text = re.sub(r'[^a-zA-Z0-9\s]', ' ', text)
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
-    
+
+    # ---------- New caching helpers ----------
+    def build_and_cache_author_corpora(self, max_papers_per_author: int = 10, force: bool = False) -> bool:
+        """Build preprocessed author corpora (text) and cache them to speed up repeated runs."""
+        cache_dir = (Path(self.dataset_path).parent / "cache").resolve()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / "author_corpora.pkl"
+        if cache_file.exists() and not force:
+            try:
+                with open(cache_file, "rb") as f:
+                    self.author_corpora = pickle.load(f)
+                return True
+            except Exception:
+                pass
+
+        self.author_corpora = {}
+        for author in self.authors:
+            author_path = os.path.join(self.dataset_path, author)
+            pdf_files = [f for f in os.listdir(author_path) if f.endswith(".pdf")]
+            combined_text = ""
+            for pdf_file in pdf_files[:max_papers_per_author]:
+                pdf_path = os.path.join(author_path, pdf_file)
+                txt = self.extract_text_from_pdf(pdf_path)
+                combined_text += " " + txt
+            self.author_corpora[author] = self.preprocess_text(combined_text)
+        try:
+            with open(cache_file, "wb") as f:
+                pickle.dump(self.author_corpora, f)
+        except Exception:
+            pass
+        return True
+
+    def build_and_cache_bert_embeddings(self, model_name: str = 'all-MiniLM-L6-v2', force: bool = False) -> bool:
+        """Compute and persist author embeddings using sentence-transformers."""
+        cache_dir = (Path(self.dataset_path).parent / "cache").resolve()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / "author_embeddings.pkl"
+        if cache_file.exists() and not force:
+            try:
+                with open(cache_file, "rb") as f:
+                    self.author_embeddings = pickle.load(f)
+                return True
+            except Exception:
+                pass
+
+        try:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(model_name)
+        except Exception:
+            # model not available or can't be downloaded in this environment
+            return False
+
+        # Ensure corpora exist
+        if not self.author_corpora:
+            self.build_and_cache_author_corpora()
+
+        authors = []
+        texts = []
+        for author, txt in self.author_corpora.items():
+            authors.append(author)
+            texts.append(txt[:20000])  # limit to speed up embedding and reduce memory
+
+        if not texts:
+            return False
+
+        try:
+            embeddings = model.encode(texts, show_progress_bar=True)
+            self.author_embeddings = {a: emb for a, emb in zip(authors, embeddings)}
+            with open(cache_file, "wb") as f:
+                pickle.dump(self.author_embeddings, f)
+            return True
+        except Exception:
+            return False
+
+    # ---------- Similarity methods prefer cached data ----------
     def compute_tfidf_similarity(self, query_text: str, k: int = 5) -> List[Dict]:
         from sklearn.feature_extraction.text import TfidfVectorizer
         from sklearn.metrics.pairwise import cosine_similarity
-        author_texts = {}
-        for author in self.authors:
-            author_path = os.path.join(self.dataset_path, author)
-            pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
-            combined_text = ""
-            for pdf_file in pdf_files[:10]:
-                pdf_path = os.path.join(author_path, pdf_file)
-                text = self.extract_text_from_pdf(pdf_path)
-                combined_text += " " + text
-            author_texts[author] = self.preprocess_text(combined_text)
-        corpus = [query_text] + list(author_texts.values())
+
+        # Use cached corpora if present, otherwise build inline
+        if self.author_corpora:
+            authors = list(self.authors)
+            texts = [self.author_corpora.get(a, "") for a in authors]
+        else:
+            authors = list(self.authors)
+            texts = []
+            for author in authors:
+                author_path = os.path.join(self.dataset_path, author)
+                pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
+                combined_text = ""
+                for pdf_file in pdf_files[:10]:
+                    pdf_path = os.path.join(author_path, pdf_file)
+                    text = self.extract_text_from_pdf(pdf_path)
+                    combined_text += " " + text
+                texts.append(self.preprocess_text(combined_text))
+
+        corpus = [query_text] + texts
         vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
         tfidf_matrix = vectorizer.fit_transform(corpus)
         query_vector = tfidf_matrix[0]
@@ -110,7 +197,7 @@ class ReviewerRecommendationSystem:
         top_indices = np.argsort(similarities)[::-1][:k]
         results = []
         for idx in top_indices:
-            author_name = self.authors[idx]
+            author_name = authors[idx]
             author_path = os.path.join(self.dataset_path, author_name)
             num_papers = len([f for f in os.listdir(author_path) if f.endswith('.pdf')])
             results.append({
@@ -118,24 +205,32 @@ class ReviewerRecommendationSystem:
                 'similarity': float(similarities[idx]),
                 'papers': num_papers,
                 'h_index': np.random.randint(10, 30),
-                'expertise': self._extract_keywords(author_texts[self.authors[idx]])
+                'expertise': self._extract_keywords(texts[idx])
             })
         return results
-    
+
     def compute_lda_similarity(self, query_text: str, k: int = 5) -> List[Dict]:
         from sklearn.feature_extraction.text import CountVectorizer
         from sklearn.decomposition import LatentDirichletAllocation
-        author_texts = {}
-        for author in self.authors:
-            author_path = os.path.join(self.dataset_path, author)
-            pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
-            combined_text = ""
-            for pdf_file in pdf_files[:10]:
-                pdf_path = os.path.join(author_path, pdf_file)
-                text = self.extract_text_from_pdf(pdf_path)
-                combined_text += " " + text
-            author_texts[author] = self.preprocess_text(combined_text)
-        corpus = [query_text] + list(author_texts.values())
+        from scipy.spatial.distance import cosine
+
+        if self.author_corpora:
+            authors = list(self.authors)
+            texts = [self.author_corpora.get(a, "") for a in authors]
+        else:
+            authors = list(self.authors)
+            texts = []
+            for author in authors:
+                author_path = os.path.join(self.dataset_path, author)
+                pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
+                combined_text = ""
+                for pdf_file in pdf_files[:10]:
+                    pdf_path = os.path.join(author_path, pdf_file)
+                    text = self.extract_text_from_pdf(pdf_path)
+                    combined_text += " " + text
+                texts.append(self.preprocess_text(combined_text))
+
+        corpus = [query_text] + texts
         vectorizer = CountVectorizer(max_features=1000, stop_words='english')
         dtm = vectorizer.fit_transform(corpus)
         lda = LatentDirichletAllocation(n_components=20, random_state=42)
@@ -144,14 +239,15 @@ class ReviewerRecommendationSystem:
         author_topics = topic_distributions[1:]
         similarities = []
         for author_topic in author_topics:
-            from scipy.spatial.distance import cosine
             sim = 1 - cosine(query_topics, author_topic)
+            if np.isnan(sim):
+                sim = 0.0
             similarities.append(sim)
         similarities = np.array(similarities)
         top_indices = np.argsort(similarities)[::-1][:k]
         results = []
         for idx in top_indices:
-            author_name = self.authors[idx]
+            author_name = authors[idx]
             author_path = os.path.join(self.dataset_path, author_name)
             num_papers = len([f for f in os.listdir(author_path) if f.endswith('.pdf')])
             results.append({
@@ -159,37 +255,51 @@ class ReviewerRecommendationSystem:
                 'similarity': float(similarities[idx]),
                 'papers': num_papers,
                 'h_index': np.random.randint(10, 30),
-                'expertise': self._extract_keywords(author_texts[self.authors[idx]])
+                'expertise': self._extract_keywords(texts[idx])
             })
         return results
-    
+
     def compute_doc2vec_similarity(self, query_text: str, k: int = 5) -> List[Dict]:
         from gensim.models.doc2vec import Doc2Vec, TaggedDocument
         from gensim.utils import simple_preprocess
+
+        if self.author_corpora:
+            authors = list(self.authors)
+            texts = [self.author_corpora.get(a, "") for a in authors]
+        else:
+            authors = list(self.authors)
+            texts = []
+            for author in authors:
+                author_path = os.path.join(self.dataset_path, author)
+                pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
+                combined_text = ""
+                for pdf_file in pdf_files[:10]:
+                    pdf_path = os.path.join(author_path, pdf_file)
+                    text = self.extract_text_from_pdf(pdf_path)
+                    combined_text += " " + text
+                texts.append(self.preprocess_text(combined_text))
+
         documents = []
-        author_texts = {}
-        for author in self.authors:
-            author_path = os.path.join(self.dataset_path, author)
-            pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
-            combined_text = ""
-            for pdf_file in pdf_files[:10]:
-                pdf_path = os.path.join(author_path, pdf_file)
-                text = self.extract_text_from_pdf(pdf_path)
-                combined_text += " " + text
-            author_texts[author] = self.preprocess_text(combined_text)
-            documents.append(TaggedDocument(simple_preprocess(author_texts[author]), [author]))
-        model = Doc2Vec(documents, vector_size=100, window=5, min_count=2, workers=4, epochs=20)
-        query_vector = model.infer_vector(simple_preprocess(query_text))
-        similarities = []
-        for author in self.authors:
-            author_vector = model.dv[author]
-            sim = np.dot(query_vector, author_vector) / (np.linalg.norm(query_vector) * np.linalg.norm(author_vector))
-            similarities.append(sim)
-        similarities = np.array(similarities)
+        for author, txt in zip(authors, texts):
+            documents.append(TaggedDocument(simple_preprocess(txt), [author]))
+
+        try:
+            model = Doc2Vec(documents, vector_size=100, window=5, min_count=2, workers=4, epochs=20)
+            query_vector = model.infer_vector(simple_preprocess(query_text))
+            similarities = []
+            for author in authors:
+                author_vector = model.dv[author]
+                sim = np.dot(query_vector, author_vector) / (np.linalg.norm(query_vector) * np.linalg.norm(author_vector))
+                similarities.append(sim)
+            similarities = np.array(similarities)
+        except Exception:
+            # fallback to zeros if Doc2Vec fails
+            similarities = np.zeros(len(authors))
+
         top_indices = np.argsort(similarities)[::-1][:k]
         results = []
         for idx in top_indices:
-            author_name = self.authors[idx]
+            author_name = authors[idx]
             author_path = os.path.join(self.dataset_path, author_name)
             num_papers = len([f for f in os.listdir(author_path) if f.endswith('.pdf')])
             results.append({
@@ -197,41 +307,83 @@ class ReviewerRecommendationSystem:
                 'similarity': float(similarities[idx]),
                 'papers': num_papers,
                 'h_index': np.random.randint(10, 30),
-                'expertise': self._extract_keywords(author_texts[author_name])
+                'expertise': self._extract_keywords(texts[idx])
             })
         return results
+
     def compute_bert_similarity(self, query_text: str, k: int = 5) -> List[Dict]:
-        from sentence_transformers import SentenceTransformer
         from sklearn.metrics.pairwise import cosine_similarity
-        model = SentenceTransformer('all-MiniLM-L6-v2')
-        author_texts = {}
-        for author in self.authors:
-            author_path = os.path.join(self.dataset_path, author)
-            pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
-            combined_text = ""
-            for pdf_file in pdf_files[:10]:
-                pdf_path = os.path.join(author_path, pdf_file)
-                text = self.extract_text_from_pdf(pdf_path)
-                combined_text += " " + text
-            author_texts[author] = self.preprocess_text(combined_text)[:10000]
-        query_embedding = model.encode([query_text[:10000]])[0]
-        author_embeddings = model.encode(list(author_texts.values()))
-        similarities = cosine_similarity([query_embedding], author_embeddings)[0]
-        top_indices = np.argsort(similarities)[::-1][:k]
-        results = []
-        for idx in top_indices:
-            author_name = self.authors[idx]
-            author_path = os.path.join(self.dataset_path, author_name)
-            num_papers = len([f for f in os.listdir(author_path) if f.endswith('.pdf')])
-            results.append({
-                'author': author_name,
-                'similarity': float(similarities[idx]),
-                'papers': num_papers,
-                'h_index': np.random.randint(10, 30),
-                'expertise': self._extract_keywords(author_texts[author_name])
-            })
-        return results
-    
+        # Use precomputed embeddings if available
+        if getattr(self, "author_embeddings", None):
+            try:
+                # Load a small local model to compute query embedding
+                from sentence_transformers import SentenceTransformer
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                q_emb = model.encode([query_text[:20000]])[0]
+                authors = list(self.author_embeddings.keys())
+                author_embs = np.vstack([self.author_embeddings[a] for a in authors])
+                sims = cosine_similarity([q_emb], author_embs)[0]
+                top_idx = np.argsort(sims)[::-1][:k]
+                results = []
+                for idx in top_idx:
+                    author_name = authors[idx]
+                    author_path = os.path.join(self.dataset_path, author_name)
+                    num_papers = len([f for f in os.listdir(author_path) if f.endswith('.pdf')])
+                    expertise_text = self.author_corpora.get(author_name, "") if self.author_corpora else ""
+                    results.append({
+                        'author': author_name,
+                        'similarity': float(sims[idx]),
+                        'papers': num_papers,
+                        'h_index': np.random.randint(10, 30),
+                        'expertise': self._extract_keywords(expertise_text)
+                    })
+                return results
+            except Exception:
+                # if anything goes wrong with precomputed flow, fallback to on-the-fly
+                pass
+
+        # Fallback: compute embeddings on-the-fly (slower)
+        try:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer('all-MiniLM-L6-v2')
+            if self.author_corpora:
+                authors = list(self.authors)
+                texts = [self.author_corpora.get(a, "") for a in authors]
+            else:
+                authors = list(self.authors)
+                texts = []
+                for author in authors:
+                    author_path = os.path.join(self.dataset_path, author)
+                    pdf_files = [f for f in os.listdir(author_path) if f.endswith('.pdf')]
+                    combined_text = ""
+                    for pdf_file in pdf_files[:10]:
+                        pdf_path = os.path.join(author_path, pdf_file)
+                        text = self.extract_text_from_pdf(pdf_path)
+                        combined_text += " " + text
+                    texts.append(self.preprocess_text(combined_text))
+
+            query_embedding = model.encode([query_text[:20000]])[0]
+            author_embeddings = model.encode(texts)
+            sims = cosine_similarity([query_embedding], author_embeddings)[0]
+            top_indices = np.argsort(sims)[::-1][:k]
+            results = []
+            for idx in top_indices:
+                author_name = authors[idx]
+                author_path = os.path.join(self.dataset_path, author_name)
+                num_papers = len([f for f in os.listdir(author_path) if f.endswith('.pdf')])
+                results.append({
+                    'author': author_name,
+                    'similarity': float(sims[idx]),
+                    'papers': num_papers,
+                    'h_index': np.random.randint(10, 30),
+                    'expertise': self._extract_keywords(texts[idx])
+                })
+            return results
+        except Exception as e:
+            # If sentence-transformers can't run, return empty list
+            st.warning(f"BERT similarity currently unavailable: {e}")
+            return []
+
     def compute_ensemble_similarity(self, query_text: str, k: int = 5) -> List[Dict]:
         tfidf_results = self.compute_tfidf_similarity(query_text, k*2)
         author_scores = {}
@@ -251,7 +403,7 @@ class ReviewerRecommendationSystem:
                 'expertise': ['Machine Learning', 'NLP', 'Deep Learning'][:np.random.randint(2, 4)]
             })
         return results
-    
+
     def _extract_keywords(self, text: str, top_n: int = 3) -> List[str]:
         from sklearn.feature_extraction.text import TfidfVectorizer
         if not text:
@@ -284,6 +436,17 @@ with st.sidebar:
             if system.load_dataset():
                 st.session_state.system = system
                 st.success(f"✅ Loaded {len(system.authors)} authors")
+
+                # Precompute and cache author corpora (fast)
+                with st.spinner("Building author corpora cache..."):
+                    system.build_and_cache_author_corpora()
+
+                # Optionally build embeddings (takes time and downloads model).
+                # If it fails (e.g. model download not allowed), inform the user.
+                with st.spinner("Building BERT embeddings (may take a while on first run)..."):
+                    ok = system.build_and_cache_bert_embeddings()
+                    if not ok:
+                        st.info("Note: BERT embeddings couldn't be built here. You can precompute them locally and commit cache/author_embeddings.pkl to the repo for faster startup.")
             else:
                 st.error("Failed to load dataset")
     st.divider()

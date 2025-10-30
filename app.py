@@ -178,10 +178,20 @@ with tabs[0]:
                             
                             st.rerun()
                         
-                        except AttributeError:
-                            st.error(f"❌ Method '{method_name}' not found in backend")
+                        except ImportError as e:
+                            st.error(f"❌ Missing package: {str(e)}")
+                            st.error("This usually means scikit-learn is not installed. Check requirements.txt")
+                            if os.path.exists("temp_paper.pdf"):
+                                os.remove("temp_paper.pdf")
+                        except AttributeError as e:
+                            st.error(f"❌ Method '{method_name}' not found in backend: {str(e)}")
+                            if os.path.exists("temp_paper.pdf"):
+                                os.remove("temp_paper.pdf")
                         except Exception as e:
                             st.error(f"❌ Error during analysis: {str(e)}")
+                            st.error(f"Error type: {type(e).__name__}")
+                            import traceback
+                            st.code(traceback.format_exc())
                             if os.path.exists("temp_paper.pdf"):
                                 os.remove("temp_paper.pdf")
 

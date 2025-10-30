@@ -5,6 +5,34 @@ from pathlib import Path
 import numpy as np
 from typing import List, Dict, Tuple
 import time
+# --- BEGIN: dependency availability check (paste near top of app.py) ---
+import importlib
+_missing_pkgs = []
+_required_pkgs = [
+    ("sklearn", "scikit-learn"),
+    ("PyPDF2", "PyPDF2"),
+    ("pdfplumber", "pdfplumber"),
+    ("gensim", "gensim"),
+    ("numpy", "numpy"),
+    ("scipy", "scipy")
+]
+
+for mod_name, pkg_name in _required_pkgs:
+    try:
+        importlib.import_module(mod_name)
+    except Exception:
+        _missing_pkgs.append(pkg_name)
+
+if _missing_pkgs:
+    # show friendly, actionable UI notice
+    import streamlit as _st
+    with _st.sidebar:
+        _st.error(
+            "Missing Python packages required by the app:\n\n" +
+            ", ".join(_missing_pkgs) +
+            "\n\nPlease ensure these are listed in requirements.txt and redeploy."
+        )
+# --- END: dependency availability check ---
 
 st.set_page_config(
     page_title="Reviewer Recommendation System",
@@ -449,3 +477,4 @@ with tabs[2]:
     - Consider your use case when selecting a method
     """)
 st.divider()
+

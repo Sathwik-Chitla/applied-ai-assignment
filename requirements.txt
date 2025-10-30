@@ -23,3 +23,7 @@ requests==2.32.2
 
 # Optional for cloud storage (if you host dataset externally)
 boto3==1.30.46
+
+gdown==4.7.0
+
+

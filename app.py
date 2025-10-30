@@ -6,39 +6,12 @@ import numpy as np
 from typing import List, Dict, Tuple
 import time
 
-# --- BEGIN: dependency availability check ---
-import importlib
-_missing_pkgs = []
-_required_pkgs = [
-    ("sklearn", "scikit-learn"),
-    ("PyPDF2", "PyPDF2"),
-    ("pdfplumber", "pdfplumber"),
-    ("gensim", "gensim"),
-    ("numpy", "numpy"),
-    ("scipy", "scipy")
-]
-
-for mod_name, pkg_name in _required_pkgs:
-    try:
-        importlib.import_module(mod_name)
-    except Exception:
-        _missing_pkgs.append(pkg_name)
-
-if _missing_pkgs:
-    import streamlit as _st
-    with _st.sidebar:
-        _st.error(
-            "Missing Python packages required by the app:\n\n" +
-            ", ".join(_missing_pkgs) +
-            "\n\nPlease ensure these are listed in requirements.txt and redeploy."
-        )
-# --- END: dependency availability check ---
-
-# Import backend after dependency check
+# Import backend - let Python handle the errors naturally
 try:
     from backend import ReviewerRecommendationSystem
-except ImportError:
-    st.error("❌ Could not import backend.py. Make sure backend.py is in the same directory as app.py")
+except ImportError as e:
+    st.error(f"❌ Import Error: {str(e)}")
+    st.error("Make sure backend.py is in the same directory and all packages are installed.")
     st.stop()
 
 st.set_page_config(

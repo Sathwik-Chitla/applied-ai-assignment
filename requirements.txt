@@ -13,7 +13,7 @@ PyPDF2==3.0.1
 pdfplumber==0.9.0
 pdfminer.six==20221105
 
-# NLP / Embeddings (gensim for Doc2Vec; sentence-transformers removed for cloud)
+# NLP / embeddings (precompute sentence-transformers locally; gensim for Doc2Vec)
 gensim==4.4.0
 nltk==3.8.1
 
@@ -21,8 +21,8 @@ nltk==3.8.1
 requests==2.32.5
 gdown==4.7.0
 
-# Images / file handling
-pillow>=10.1.0
+# Images / file handling (must be <10 for Streamlit 1.26)
+pillow==9.5.0
 
 # Cloud storage (optional)
 boto3==1.28.57
